@@ -1,4 +1,4 @@
-name: RDP
+herename: RDP
 
 on:
   workflow_dispatch:
@@ -9,26 +9,34 @@ jobs:
     timeout-minutes: 3600
 
     steps:
+      # =========================
+      # Enable RDP correctly (NLA + TLS)
+      # =========================
       - name: Configure Core RDP Settings
         run: |
+          # Enable RDP
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
             -Name "fDenyTSConnections" -Value 0 -Force
 
+          # ENABLE NLA (REQUIRED)
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-            -Name "UserAuthentication" -Value 0 -Force
+            -Name "UserAuthentication" -Value 1 -Force
 
+          # ENABLE TLS
           Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-            -Name "SecurityLayer" -Value 0 -Force
+            -Name "SecurityLayer" -Value 1 -Force
 
+          # Firewall rule
           netsh advfirewall firewall delete rule name="RDP-Tailscale" 2>$null
           netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
 
-          Restart-Service -Name TermService -Force
+          Restart-Service TermService -Force
 
+      # =========================
+      # Create RDP user
+      # =========================
       - name: Create RDP User with Secure Password
         run: |
-          Add-Type -AssemblyName System.Security
-
           $chars = ([char[]](33..126))
           $password = -join (1..16 | ForEach-Object { $chars | Get-Random })
 
@@ -39,6 +47,9 @@ jobs:
 
           echo "RDP_PASSWORD=$password" >> $env:GITHUB_ENV
 
+      # =========================
+      # Install Tailscale
+      # =========================
       - name: Install Tailscale
         run: |
           $url = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
@@ -48,6 +59,9 @@ jobs:
           Start-Process msiexec.exe -ArgumentList "/i `"$path`" /quiet /norestart" -Wait
           Remove-Item $path -Force
 
+      # =========================
+      # Connect Tailscale (Non-interactive)
+      # =========================
       - name: Establish Tailscale Connection
         env:
           TAILSCALE_AUTHKEY: ${{ secrets.TAILSCALE_AUTHKEY }}
@@ -61,10 +75,16 @@ jobs:
           $ip = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
           echo "TAILSCALE_IP=$ip" >> $env:GITHUB_ENV
 
+      # =========================
+      # Verify RDP port
+      # =========================
       - name: Verify RDP Accessibility
         run: |
           Test-NetConnection $env:TAILSCALE_IP -Port 3389
 
+      # =========================
+      # Keep session alive
+      # =========================
       - name: Maintain Connection
         run: |
           Write-Host ""
